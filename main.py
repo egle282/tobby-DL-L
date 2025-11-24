@@ -109,6 +109,20 @@ def webhook():
 def index():
     return "Бот живой!", 200
 
+import time
+import requests
+
+def keep_alive():
+    """Пинг каждые 10 мин, чтобы Render не засыпал (free tier)"""
+    while True:
+        try:
+            requests.get("https://tobby-dl-l.onrender.com", timeout=5)
+        except:
+            pass  # игнорируем ошибки
+        time.sleep(600)  # 10 мин
+
+# Запускаем пинг в фоне
+threading.Thread(target=keep_alive, daemon=True).start()
 # === Запуск ===
 if __name__ == "__main__":
     logging.info("Бот запущен на Render!")
