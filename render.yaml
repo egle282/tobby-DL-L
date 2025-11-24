@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: tobby-bot
+    env: python
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: python main.py
+    autoDeploy: true
