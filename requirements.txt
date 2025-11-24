@@ -1,7 +1,7 @@
 pyTelegramBotAPI==4.22.0
 flask==3.0.3
 yt-dlp[default]==2024.10.22
-openai==openai
+openai
 moviepy==1.0.3
 instagrapi==2.2.1
 redis==5.0.8
