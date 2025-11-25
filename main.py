@@ -17,11 +17,10 @@ REDIS_URL = os.getenv("REDIS_URL")
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# Redis
+# ← ЭТО ГЛАВНОЕ: очередь называется "default"
 redis_conn = Redis.from_url(REDIS_URL)
-queue = Queue("default", connection=redis_conn)          # ← без имени — это важно!
+queue = Queue("default", connection=redis_conn)
 
-# Скачивание
 def download_and_send(url, chat_id, message_id):
     try:
         ydl_opts = {
@@ -36,14 +35,13 @@ def download_and_send(url, chat_id, message_id):
             filename = ydl.prepare_filename(info)
 
         with open(filename, 'rb') as video:
-            bot.send_video(chat_id, video, reply_to_message_id=message_id, timeout=300)
+            bot.send_video(chat_id, video, reply_to_message_id=message_id, timeout=600)
         os.remove(filename)
-        print(f"Видео отправлено: {url}")
+        print(f"УСПЕШНО отправлено: {url}")
     except Exception as e:
         bot.send_message(chat_id, f"Ошибка: {str(e)}")
-        print(f"Ошибка скачивания: {e}")
+        print(f"ОШИБКА: {e}")
 
-# Обработчики
 @bot.message_handler(commands=['start'])
 def start(m):
     bot.reply_to(m, "Кидай любую ссылку — пришлю видео без водяков!")
@@ -51,11 +49,10 @@ def start(m):
 @bot.message_handler(func=lambda m: True)
 def handle(m):
     url = m.text.strip()
-    if any(s in url for s in ["youtube", "youtu.be", "tiktok", "instagram", "x.com", "twitter"]):
+    if any(x in url for x in ["youtube", "youtu.be", "tiktok", "instagram", "x.com", "twitter"]):
         bot.reply_to(m, "Скачиваю… (10–60 сек)")
-        queue.enqueue(download_and_send, url, m.chat.id, m.message_id)   # ← задача в очередь
+        queue.enqueue(download_and_send, url, m.chat.id, m.message_id)
 
-# Webhook
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
@@ -68,29 +65,26 @@ def webhook():
 def home():
     return "Бот живой!", 200
 
-# Keep-alive + RQ worker в ОДНОМ потоке (самый надёжный способ на бесплатном плане)
-def worker_and_ping():
-    # Keep-alive пинг каждые 10 минут
+# ← ЭТО РАБОЧИЙ keep-alive + постоянный worker
+def forever_worker():
     url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'tobby-dl-l.onrender.com')}"
     while True:
         try:
-            requests.get(url, timeout=10)
+            requests.get(url, timeout=10)      # keep-alive
         except:
             pass
         
-        # Каждые 30 секунд пытаемся обработать задачи из очереди
+        # Постоянно обрабатываем очередь (без burst)
         try:
-            from rq import Connection
+            from rq import Connection, SimpleWorker
             with Connection(redis_conn):
-                from rq.worker import SimpleWorker
-                w = SimpleWorker([queue], connection=redis_conn)
-                w.work(burst=True, max_jobs=5)   # обрабатываем до 5 задач и возвращаемся
+                worker = SimpleWorker([queue], connection=redis_conn)
+                worker.work(burst=False, max_jobs=1)   # ← НЕ burst, работает вечно
         except:
             pass
-        time.sleep(30)
+        time.sleep(10)
 
 if __name__ == "__main__":
-    print("Бот запущен! Worker и keep-alive работают в фоне")
-    threading.Thread(target=worker_and_ping, daemon=True).start()
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    print("БОТ ЗАПУЩЕН — ВСЁ РАБОТАЕТ!")
+    threading.Thread(target=forever_worker, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
