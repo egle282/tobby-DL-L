@@ -19,7 +19,7 @@ app = Flask(__name__)
 
 # Redis
 redis_conn = Redis.from_url(REDIS_URL)
-queue = Queue(connection=redis_conn)          # ← без имени — это важно!
+queue = Queue("default", connection=redis_conn)          # ← без имени — это важно!
 
 # Скачивание
 def download_and_send(url, chat_id, message_id):
