@@ -1,44 +1,41 @@
 import os
 import logging
 import telebot
+import threading   # ← ЭТО БЫЛО ЗАБЫТО
+import requests    # ← И ЭТО ТОЖЕ
 from flask import Flask, request
 from dotenv import load_dotenv
 from openai import OpenAI
 import yt_dlp
 
-# --- Загрузка переменных окружения ---
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+REDIS_URL = os.getenv("REDIS_URL")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-REDIS_URL = os.getenv("REDIS_URL")      # Upstash или Render Key Value
-ADMIN_IDS = [int(i) for i in os.getenv("ADMIN_IDS", "").split(",") if i]
 
-# --- Инициализация ---
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
-client = OpenAI(api_key=OPENAI_API_KEY)  # пока не используем, но оставим
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- Redis + RQ (ГЛАВНОЕ ИСПРАВЛЕНИЕ) ---
+# === Redis + RQ (обязательно имя очереди "default") ===
 if not REDIS_URL:
-    print("ОШИБКА: REDIS_URL не найден в переменных окружения!")
+    print("ОШИБКА: REDIS_URL не найден!")
 else:
     from redis import Redis
     from rq import Queue
     redis_conn = Redis.from_url(REDIS_URL)
-    # Явно указываем имя очереди "default" — это критично для Render!
     queue = Queue("default", connection=redis_conn)
-    print(f"Подключено к Redis: {REDIS_URL[:40]}...")
+    print(f"Redis подключён: {REDIS_URL[:40]}...")
 
-# --- Логирование ---
 logging.basicConfig(level=logging.INFO)
 
-# === Функция скачивания (выполняется в фоне) ===
+# === Функция скачивания ===
 def download_and_send(url, chat_id, message_id=None):
     try:
         ydl_opts = {
             'format': 'best[height<=720]',
-            'outtmpl': f'/tmp/{chat_id}_{url.split("/")[-1]}.%(ext)s',
+            'outtmpl': f'/tmp/{chat_id}_{abs(hash(url))}.%(ext)s',
             'merge_output_format': 'mp4',
             'quiet': True,
             'no_warnings': True,
@@ -47,86 +44,63 @@ def download_and_send(url, chat_id, message_id=None):
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
 
-        # Проверка размера (Telegram лимит 50 МБ без премиума)
         if os.path.getsize(filename) > 50 * 1024 * 1024:
-            bot.send_message(chat_id, "Видео слишком большое (>50 МБ). Попробуй шорт или 720p.")
+            bot.send_message(chat_id, "Видео >50 МБ, Telegram не примет")
             os.remove(filename)
             return
 
         with open(filename, 'rb') as video:
             bot.send_video(chat_id, video, timeout=300, reply_to_message_id=message_id)
-
         os.remove(filename)
-        logging.info(f"Видео успешно отправлено: {url}")
-
     except Exception as e:
-        bot.send_message(chat_id, f"Не удалось скачать: {str(e)}")
-        logging.error(f"Ошибка скачивания {url}: {e}")
+        bot.send_message(chat_id, f"Ошибка: {str(e)}")
+        logging.error(f"Ошибка скачивания")
 
-# === Обработчики Telegram ===
+# === Обработчики ===
 @bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    text = (
-        "Привет! Я скачиваю видео с:\n\n"
-        "• YouTube / Shorts\n"
-        "• TikTok\n"
-        "• Instagram Reels\n"
-        "• Twitter / X\n\n"
-        "Просто отправь ссылку — пришлю чистое видео без водяных знаков!\n\n"
-        "/ref — твоя реферальная ссылка"
-    )
-    bot.reply_to(message, text)
-
-@bot.message_handler(commands=['ref'])
-def ref_link(message):
-    user_id = str(message.from_user.id)
-    refs = redis_conn.hget("referrals", user_id) or 0
-    bot_username = bot.get_me().username
-    link = f"https://t.me/{bot_username}?start={user_id}"
-    bot.reply_to(message, f"Твоя реферальная ссылка:\n{link}\n\nПриглашено: {int(refs)} человек")
+def start(message):
+    bot.reply_to(message, "Привет! Кидай ссылку с YouTube / TikTok / Instagram Reels / X — пришлю видео без водяных знаков")
 
 @bot.message_handler(func=lambda m: True)
-def handle_message(message):
+def handle_url(message):
     url = message.text.strip()
-    platforms = ["youtube.com", "youtu.be", "tiktok.com", "instagram.com", "x.com", "twitter.com"]
-    if any(p in url for p in platforms):
-        bot.reply_to(message, "Скачиваю видео… (10–60 сек)")
-        # Ставим задачу в очередь — теперь worker её точно увидит!
+    if any(x in url for x in ["youtube.com", "youtu.be", "tiktok.com", "instagram.com", "x.com", "twitter.com"]):
+        bot.reply_to(message, "Скачиваю… (10–60 сек)")
         queue.enqueue(download_and_send, url, message.chat.id, message.message_id)
     else:
-        bot.reply_to(message, "Отправь ссылку на видео с YouTube, TikTok, Instagram или X")
+        bot.reply_to(message, "Пришли нормальную ссылку на видео")
 
-# === Flask webhook для Render ===
+# === Webhook ===
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if request.headers.get('Content-Type') == 'application/json':
         update = telebot.types.Update.de_json(request.get_data().decode('utf-8'))
         bot.process_new_updates([update])
         return '', 200
-    return 'Forbidden', 403
+    return 'ok', 200
 
 @app.route('/')
 def index():
     return "Бот живой!", 200
 
-import time
-import requests
-
+# === Keep-alive для бесплатного плана Render (чтобы не засыпал) ===
 def keep_alive():
-    """Пинг каждые 10 мин, чтобы Render не засыпал (free tier)"""
+    url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME') or 'tobby-dl-l.onrender.com'}"
     while True:
         try:
-            requests.get("https://tobby-dl-l.onrender.com", timeout=5)
+            requests.get(url, timeout=5)
         except:
-            pass  # игнорируем ошибки
-        time.sleep(600)  # 10 мин
+            pass
+        time.sleep(600)  # каждые 10 минут
 
-# Запускаем пинг в фоне
-threading.Thread(target=keep_alive, daemon=True).start()
 # === Запуск ===
 if __name__ == "__main__":
-    logging.info("Бот запущен на Render!")
     print("Бот запущен на Render!")
-    
+    logging.info("Бот запущен на Render!")
+
+    # Запускаем пинг в фоне
+    threading.Thread(target=keep_alive, daemon=True).start()
+
+    # Запускаем Flask (Render сам найдёт порт)
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
