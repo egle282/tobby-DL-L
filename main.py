@@ -2,7 +2,6 @@ import os
 import time
 import threading
 import requests
-import logging
 import telebot
 from flask import Flask, request
 from dotenv import load_dotenv
@@ -18,9 +17,14 @@ REDIS_URL = os.getenv("REDIS_URL")
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# Redis
+# Redis + RQ
 redis_conn = Redis.from_url(REDIS_URL)
 queue = Queue("default", connection=redis_conn)
+
+# RQ worker в фоне
+from rq.worker import SimpleWorker
+worker = SimpleWorker([queue], connection=redis_conn)
+threading.Thread(target=worker.work, kwargs={"with_scheduler": True}, daemon=True).start()
 
 # Скачивание
 def download_and_send(url, chat_id, message_id):
@@ -29,22 +33,21 @@ def download_and_send(url, chat_id, message_id):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(info)
-        
         with open(filename, 'rb') as f:
-            bot.send_video(chat_id, f, reply_to_message_id=message_id, timeout=300)
+            bot.send_video(chat_id, f, reply_to_message_id=message_id)
         os.remove(filename)
     except Exception as e:
         bot.send_message(chat_id, f"Ошибка: {e}")
 
-# Сообщения
+# Обработчики
 @bot.message_handler(commands=['start'])
-def start(m): bot.reply_to(m, "Кидай любую ссылку с YouTube, TikTok, Instagram, X")
+def start(m): bot.reply_to(m, "Кидай ссылку — пришлю видео")
 
 @bot.message_handler(func=lambda m: True)
-def all(m):
-    url = m.text
-    if any(x in url for x in ["youtube", "tiktok", "instagram", "x.com", "twitter"]):
-        bot.reply_to(m, "Скачиваю… жди 15–40 сек")
+def handle(m):
+    url = m.text.strip()
+    if any(x in url for x in ["youtube", "tiktok", "instagram", "x.com", "twitter", "youtu.be"]):
+        bot.reply_to(m, "Скачиваю…")
         queue.enqueue(download_and_send, url, m.chat.id, m.message_id)
 
 # Webhook
@@ -54,13 +57,13 @@ def webhook():
     bot.process_new_updates([update])
     return '', 200
 
-@app.route('/'): return "живой"
+@app.route('/'): return "ok"
 
-# Keep-alive (чтобы не засыпал)
+# Keep-alive
 def keep_alive():
     url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'tobby-dl-l.onrender.com')}"
     while True:
-        try: requests.get(url)
+        try: requests.get(url, timeout=10)
         except: pass
         time.sleep(600)
 
