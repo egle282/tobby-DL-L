@@ -14,7 +14,6 @@ REDIS_URL = os.getenv("REDIS_URL")
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# ОЧЕРЕДЬ "default" — именно её слушает rq worker из команды запуска
 queue = Queue("default", connection=Redis.from_url(REDIS_URL))
 
 def download_and_send(url, chat_id, message_id):
@@ -31,7 +30,7 @@ def download_and_send(url, chat_id, message_id):
             filename = ydl.prepare_filename(info)
 
         if os.path.getsize(filename) > 49_000_000:
-            bot.send_message(chat_id, "Видео >49 МБ — Telegram не примет")
+            bot.send_message(chat_id, "Видео слишком большое (>49 МБ)")
             os.remove(filename)
             return
 
@@ -45,7 +44,7 @@ def download_and_send(url, chat_id, message_id):
 
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.reply_to(m, "Кидай ссылку — пришлю видео без водяков!")
+    bot.reply_to(m, "Кидай любую ссылку — пришлю видео без водяков!")
 
 @bot.message_handler(func=lambda m: True)
 def handle(m):
@@ -54,18 +53,22 @@ def handle(m):
         bot.reply_to(m, "Скачиваю… (10–60 сек)")
         queue.enqueue(download_and_send, url, m.chat.id, m.message_id)
 
-@app.route('/webhook', methods=['POST'])
+# ← ЭТО САМАЯ РАБОЧАЯ ВЕРСИЯ WEBHOOK ДЛЯ RAILWAY
+@app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
+    if request.method == 'GET':
+        return "Бот живой!", 200
     if request.headers.get('content-type') == 'application/json':
-        update = telebot.types.Update.de_json(request.get_data().decode('utf-8'))
+        json_string = request.get_data().as_text()
+        update = telebot.types.Update.de_json(json_string)
         bot.process_new_updates([update])
-    return '', 200
+        return '', 200
+    return 'ok', 200
 
 @app.route('/')
 def index():
-    return "Бот живой!"
+    return "Бот живой и качает видео!"
 
-# НИКАКИХ multiprocessing, threading, keep-alive — всё запускается через Start Command
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
