@@ -6,5 +6,5 @@ services:
     region: oregon
     branch: main
     buildCommand: pip install --no-cache-dir -r requirements.txt
-    startCommand: python main.py
+    startCommand: python app.py
     autoDeploy: true
