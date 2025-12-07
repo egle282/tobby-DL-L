@@ -27,17 +27,16 @@ jobs:
     - name: Test with pytest
       run: pytest
 
-  dockerize:
+  deploy:
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     steps:
     - uses: actions/checkout@v4
-    - name: Build and push Docker image
+    - name: Deploy to Railway
       run: |
-        echo ${{ secrets.DOCKER_PASSWORD }} | docker login -u ${{ secrets.DOCKER_USERNAME }} --password-stdin
-        docker build -t ${{ secrets.DOCKER_USERNAME }}/tobby-downloader:${{ github.sha }} .
-        docker push ${{ secrets.DOCKER_USERNAME }}/tobby-downloader:${{ github.sha }}
-    - name: Deploy to Render
-      run: |
-        curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}
+        curl -X POST \
+          -H "Authorization: Bearer ${{ secrets.RAILWAY_TOKEN }}" \
+          -H "Content-Type: application/json" \
+          -d '{"projectId": "${{ secrets.RAILWAY_PROJECT_ID }}", "deploy": true}' \
+          https://api.railway.app/v2/deploy
