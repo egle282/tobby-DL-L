@@ -1,4 +1,4 @@
-import telebot
+mport telebot
 from ..services import download_video
 
 def register_handlers(bot, queue):
@@ -15,7 +15,7 @@ def register_handlers(bot, queue):
         url = message.text
         if url.startswith("http"):
             bot.reply_to(message, "Загрузка видео...")
-            queue.enqueue(download_video, url, message.chat.id, bot)
+            queue.enqueue(download_video, url, message.chat.id, bot.token)  # Передаём токен, а не объект бота
 
 def setup_admin_commands(bot):
     pass
