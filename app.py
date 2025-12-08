@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Tobby Downloader Bot - Main Application
 
@@ -52,6 +51,7 @@ def main():
     else:
         # Polling mode - good for local development
         print("Starting bot in polling mode...")
+        bot.delete_webhook()  # Удаляем вебхук перед запуском polling
         bot.infinity_polling()
 
 
