@@ -1,4 +1,4 @@
-mport yt_dlp
+import yt_dlp
 import os
 from ..config import Config
 
