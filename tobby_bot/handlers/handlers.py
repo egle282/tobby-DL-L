@@ -1,4 +1,4 @@
-mport telebot
+import telebot
 from ..services import download_video
 
 def register_handlers(bot, queue):
